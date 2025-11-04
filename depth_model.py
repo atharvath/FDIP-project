@@ -1,0 +1,42 @@
+import torch
+from PIL import Image
+import numpy as np
+import open3d as o3d
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
+import os
+
+def generate_3d_model(img_path):
+    # Load model and feature extractor
+    feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
+    model = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas")
+
+    # Load and preprocess image
+    image = Image.open(img_path).convert("RGB")
+    inputs = feature_extractor(images=image, return_tensors="pt")
+    
+    # Predict depth
+    with torch.no_grad():
+        outputs = model(**inputs)
+        predicted_depth = outputs.predicted_depth.squeeze().cpu().numpy()
+    
+    # Normalize and create 3D point cloud
+    depth_min, depth_max = predicted_depth.min(), predicted_depth.max()
+    depth = (predicted_depth - depth_min) / (depth_max - depth_min)
+    h, w = depth.shape
+    fx, fy = 525, 525
+    cx, cy = w / 2, h / 2
+    points = []
+    for y in range(h):
+        for x in range(w):
+            Z = depth[y, x]
+            X = (x - cx) * Z / fx
+            Y = (y - cy) * Z / fy
+            points.append((X, Y, Z))
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.array(points))
+
+    # Always use .ply, never image ext
+    base, _ = os.path.splitext(img_path)
+    output_path = base + "_3d.ply"
+    o3d.io.write_point_cloud(output_path, pcd)
+    return output_path
